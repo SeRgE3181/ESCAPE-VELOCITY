@@ -1,60 +1,64 @@
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800&family=Rajdhani:wght@400;500;600;700&display=swap');
 
+:root { color-scheme: dark; font-family: 'Rajdhani', sans-serif; }
 * { box-sizing: border-box; }
-html, body, #app {
-  margin: 0; width: 100%; height: 100%;
-  overflow: hidden; background: #050711;
-}
-body { font-family: 'Rajdhani', sans-serif; color: #eef7ff; }
-#game { position: relative; width: 100%; height: 100%; }
-#game canvas { display: block; width: 100%; height: 100%; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #050710; }
+body { color: #edf6ff; }
+#game { position: relative; width: 100%; height: 100%; overflow: hidden; isolation: isolate; }
+#game canvas { position: absolute; inset: 0; z-index: 0; display: block; width: 100%; height: 100%; }
 
 .topbar {
-  position: absolute; z-index: 2; top: 0; left: 0; right: 0;
-  padding: 27px 4vw; display: flex; justify-content: space-between;
-  align-items: center; pointer-events: none;
-  background: linear-gradient(#050711d9, transparent);
+  position: absolute; z-index: 2; inset: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  padding: 27px clamp(22px, 4vw, 68px) 44px; background: linear-gradient(180deg, #050710e8, #05071000); pointer-events: none;
 }
-.brand { font: 800 19px Orbitron, sans-serif; letter-spacing: 3px; }
-.brand span { color: #00eaff; }
-.status { font: 600 11px Orbitron, sans-serif; letter-spacing: 2px; color: #70ffd0; }
+.brand { font: 800 18px/1 Orbitron, sans-serif; letter-spacing: 3.2px; text-shadow: 0 2px 18px #02040c; }
+.brand > span { color: #00eaff; }
+.brand small { display: block; margin-top: 9px; color: #9ba9c2; font: 600 9px Orbitron, sans-serif; letter-spacing: 2.2px; }
+.status { display: flex; align-items: center; gap: 10px; color: #8dffdb; font: 600 10px Orbitron, sans-serif; letter-spacing: 1.5px; }
+.status i { width: 7px; height: 7px; border-radius: 50%; background: #63ffbd; box-shadow: 0 0 12px #4cffc4; }
 
 .hud {
-  position: absolute; z-index: 2; top: 110px; left: 4vw;
-  padding-left: 17px; border-left: 2px solid #00eaff;
-  text-shadow: 0 0 20px #00dfff66; pointer-events: none;
+  position: absolute; z-index: 2; top: clamp(102px, 14vh, 138px); left: clamp(22px, 4vw, 68px); width: 220px;
+  padding: 2px 0 5px 17px; border-left: 2px solid #00dfff; background: linear-gradient(90deg, #05071066, transparent);
+  text-shadow: 0 0 22px #00dfff44; pointer-events: none;
 }
-.label { font: 600 11px Orbitron, sans-serif; letter-spacing: 4px; color: #93a7ca; }
-.speed { font: 800 clamp(34px, 5vw, 60px) Orbitron, sans-serif; }
-.speed small { font: 600 11px Rajdhani, sans-serif; color: #00eaff; }
-.lap { margin-top: 12px; font: 600 13px Orbitron, sans-serif; letter-spacing: 2px; }
-.lap b { color: #00eaff; }
-.lap span { color: #8290aa; }
+.label { margin-bottom: 2px; color: #9babc6; font: 600 10px Orbitron, sans-serif; letter-spacing: 3.4px; }
+.speed { display: flex; align-items: baseline; gap: 7px; font: 800 clamp(42px, 5vw, 64px)/1 Orbitron, sans-serif; font-variant-numeric: tabular-nums; }
+.speed small { color: #00dfff; font: 600 10px Rajdhani, sans-serif; letter-spacing: 1px; }
+.speedbar, .progress { width: 180px; height: 2px; margin-top: 10px; overflow: hidden; background: #8290ad33; }
+.speedbar i, .progress i { display: block; width: 0; height: 100%; background: #00dfff; box-shadow: 0 0 9px #00dfff; transition: width 90ms linear; }
+.lap { margin-top: 15px; font: 600 12px Orbitron, sans-serif; letter-spacing: 1.7px; }
+.lap b { color: #00eaff; font-size: 15px; }
+.lap span { color: #8692aa; }
+.progress { width: 135px; height: 2px; margin-top: 7px; }
+.progress i { background: #ff3c91; box-shadow: 0 0 9px #ff3c91; }
 
 .center-message {
-  position: absolute; z-index: 2; top: 23%; left: 50%;
-  transform: translateX(-50%); font: 600 10px Orbitron, sans-serif;
-  letter-spacing: 5px; color: #b8c7e8; opacity: .75; pointer-events: none;
+  position: absolute; z-index: 2; top: 25%; left: 50%; transform: translate(-50%, -5px); opacity: 0;
+  color: #d9e8ff; font: 600 10px Orbitron, sans-serif; letter-spacing: 4px; text-align: center;
+  text-shadow: 0 0 20px #00dfff99; transition: opacity 350ms, transform 350ms; pointer-events: none;
 }
+.center-message.visible { opacity: .9; transform: translate(-50%, 0); }
 .bottom {
-  position: absolute; z-index: 2; bottom: 25px; left: 50%;
-  transform: translateX(-50%); display: flex; gap: 23px;
-  font: 600 11px Orbitron, sans-serif; color: #00eaff;
-  white-space: nowrap; pointer-events: none;
+  position: absolute; z-index: 2; left: 50%; bottom: 27px; transform: translateX(-50%); display: flex; align-items: flex-start; gap: clamp(13px, 2.4vw, 34px);
+  color: #d0deef; font: 600 10px Orbitron, sans-serif; white-space: nowrap; pointer-events: none;
 }
-.bottom span { display: block; margin-top: 4px; font: 600 9px Rajdhani, sans-serif; color: #9ba8c2; letter-spacing: 1px; }
-.crosshair {
-  position: absolute; right: 4vw; bottom: 30px;
-  font: 800 16px Orbitron, sans-serif; color: #00eaff; pointer-events: none;
-}
-.crosshair span { color: #8792ad; font-size: 10px; }
+.bottom > div { text-align: center; }
+.bottom span { display: block; margin-top: 7px; color: #91a1bc; font: 600 8px Rajdhani, sans-serif; letter-spacing: 1.5px; }
+kbd { padding: 4px 5px; border: 1px solid #60708a66; border-radius: 3px; background: #080d19b8; color: #00dfff; font: inherit; }
+.crosshair { position: absolute; z-index: 2; right: clamp(22px, 4vw, 68px); bottom: 29px; color: #00dfff; font: 800 16px Orbitron, sans-serif; pointer-events: none; }
+.crosshair span { color: #8692aa; font-size: 9px; }
+.vignette { position: absolute; z-index: 1; inset: 0; background: radial-gradient(ellipse at center, transparent 52%, #02030b66 100%); pointer-events: none; }
 
-@media (max-width: 650px) {
-  .topbar { padding: 20px; }
-  .brand { font-size: 14px; }
-  .status { font-size: 8px; }
-  .hud { top: 90px; left: 20px; }
-  .bottom { bottom: 15px; gap: 10px; font-size: 9px; }
-  .bottom span { font-size: 8px; }
+@media (max-width: 680px) {
+  .topbar { padding: 19px 18px 40px; }
+  .brand { font-size: 14px; letter-spacing: 2px; }
+  .brand small { font-size: 7px; letter-spacing: 1.4px; }
+  .status { font-size: 8px; letter-spacing: .5px; }
+  .hud { top: 92px; left: 20px; width: 170px; padding-left: 12px; }
+  .speed { font-size: 43px; }
+  .speedbar { width: 140px; }
+  .bottom { bottom: 14px; width: calc(100% - 28px); justify-content: center; flex-wrap: wrap; gap: 10px 16px; font-size: 8px; }
+  .bottom span { margin-top: 5px; font-size: 7px; }
   .crosshair { display: none; }
 }

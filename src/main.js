@@ -1,6 +1,8 @@
 import './style.css'
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { updateAudio, playCollision } from './audio.js'
+import { showFinish } from './finish.js'
 
 document.querySelector('#app').innerHTML = `
   <div id="game">
@@ -39,14 +41,14 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFShadowMap
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.2
+renderer.toneMappingExposure = 1.1
 renderer.outputColorSpace = THREE.SRGBColorSpace
 document.querySelector('#game').prepend(renderer.domElement)
 
 // Small studio environment: gives the metallic car something to reflect (without it metals render black).
 const envTex = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
 scene.environment = envTex
-scene.environmentIntensity = 0.16
+scene.environmentIntensity = 0.04
 
 // Gradient sky dome with a magenta horizon glow (follows camera, no fog).
 const sky = new THREE.Mesh(new THREE.SphereGeometry(3600, 24, 16), new THREE.ShaderMaterial({
@@ -70,6 +72,7 @@ moon.shadow.camera.top = 45
 moon.shadow.camera.bottom = -45
 moon.shadow.camera.far = 400
 moon.shadow.bias = -0.0004
+moon.shadow.normalBias = 0.06
 scene.add(moon, moon.target) // shadow frustum follows the car each frame
 const cyanFill = new THREE.PointLight(0x00dfff, 55, 170)
 const pinkFill = new THREE.PointLight(0xff168f, 42, 160)
@@ -140,7 +143,7 @@ function roadTextures() {
   x.fillStyle = '#6a7084'; x.fillRect(0, 0, 512, 512)
   y.fillStyle = '#b8b8b8'; y.fillRect(0, 0, 512, 512)
   for (let i = 0; i < 9000; i++) { const g = 80 + Math.random() * 70 | 0; x.fillStyle = `rgba(${g},${g},${g + 12},0.35)`; x.fillRect(Math.random() * 512, Math.random() * 512, 1 + Math.random() * 2, 1 + Math.random() * 2) }
-  for (let i = 0; i < 7; i++) { x.fillStyle = `rgba(30,32,46,${0.1 + Math.random() * 0.1})`; x.fillRect(Math.random() * 400, Math.random() * 500, 60 + Math.random() * 140, 14 + Math.random() * 40) }
+  for (let i = 0; i < 7; i++) { x.fillStyle = `rgba(30,32,46,${0.08 + Math.random() * 0.08})`; x.fillRect(Math.random() * 400, Math.random() * 500, 60 + Math.random() * 140, 14 + Math.random() * 40) }
   x.strokeStyle = 'rgba(10,12,20,0.55)'; x.lineWidth = 2
   for (const yy of [60, 330]) { x.beginPath(); x.moveTo(0, yy); x.lineTo(512, yy + 6); x.stroke() }
   for (let i = 0; i < 5; i++) { // wet patches: tinted + glossy
@@ -154,7 +157,7 @@ function roadTextures() {
   return [ta, tb]
 }
 const [roadMap, roadRough] = roadTextures()
-const asphalt = new THREE.MeshStandardMaterial({ color: '#8c91a8', map: roadMap, roughnessMap: roadRough, roughness: 0.85, metalness: 0.2 })
+const asphalt = new THREE.MeshStandardMaterial({ color: '#7a8096', map: roadMap, roughnessMap: roadRough, roughness: 0.85, metalness: 0.2 })
 const road = new THREE.Mesh(ribbonGeometry(0, roadWidth, 0), asphalt)
 road.receiveShadow = true
 roadGroup.add(road)
@@ -290,6 +293,7 @@ function addGantry(t, color = '#00dfff', tunnel = false) {
   const index = Math.round(t * sampleCount) % sampleCount
   const p = trackPoints[index], tangent = trackTangents[index], normal = trackNormals[index]
   const group = new THREE.Group()
+  group.name = tunnel ? 'gantry-tunnel' : 'gantry-' + t
   group.position.set(p.x, p.y, p.z)
   group.rotation.y = Math.atan2(tangent.x, tangent.z)
   const frameMat = new THREE.MeshStandardMaterial({ color: '#242c40', metalness: 0.75, roughness: 0.28 })
@@ -310,17 +314,23 @@ function addGantry(t, color = '#00dfff', tunnel = false) {
   group.add(fascia)
   scene.add(group)
   if (tunnel) {
-    for (let offset = 13; offset <= 65; offset += 13) {
-      const ceiling = new THREE.Mesh(new THREE.BoxGeometry(roadWidth + 8, 0.5, 2.5), frameMat)
-      ceiling.position.set(0, 8.8, -offset)
-      group.add(ceiling)
-      const light = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 0.45), lampEmissive)
-      light.position.set(0, 8.5, -offset)
-      group.add(light)
+    // Open tunnel that follows the curved road: short segments (roof + two walls, no end caps),
+    // each aligned to the local tangent. Walls sit outside the guardrail (collision untouched) and use
+    // BackSide so they are only visible from inside; nothing can ever wall off the road ahead.
+    const shellMat = new THREE.MeshStandardMaterial({ color: '#111627', side: THREE.BackSide, roughness: 0.78 })
+    const segSamples = 4
+    for (let k = 1; k <= 7; k++) {
+      const si = (index - k * segSamples + sampleCount) % sampleCount
+      const sp = trackPoints[si], st = trackTangents[si]
+      const seg = new THREE.Group()
+      seg.position.set(sp.x, sp.y, sp.z); seg.rotation.y = Math.atan2(st.x, st.z)
+      const len = Math.hypot(trackPoints[(si + segSamples) % sampleCount].x - sp.x, trackPoints[(si + segSamples) % sampleCount].z - sp.z) + 0.6
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(roadWidth + 10, 0.6, len), shellMat); roof.position.set(0, 9.0, len / 2 - 0.3)
+      const light = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 0.45), lampEmissive); light.position.set(0, 8.6, len / 2)
+      seg.add(roof, light)
+      for (const sd of [-1, 1]) { const wall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 9.6, len), shellMat); wall.position.set(sd * (halfRoad + 5), 4.5, len / 2 - 0.3); seg.add(wall) }
+      scene.add(seg)
     }
-    const shell = new THREE.Mesh(new THREE.BoxGeometry(roadWidth + 8, 9.5, 70), new THREE.MeshStandardMaterial({ color: '#111627', side: THREE.BackSide, roughness: 0.78 }))
-    shell.position.set(0, 4.6, -35)
-    group.add(shell)
   }
 }
 addGantry(0.015, '#00dfff')
@@ -474,7 +484,7 @@ for (let i = 0; i < 18; i++) {
   const index = Math.floor((i + 0.5) / 18 * sampleCount)
   const p = trackPoints[index], n = trackNormals[index]
   const side = i % 2 ? -1 : 1
-  const boardW = 26, boardH = 9
+  const boardW = 30, boardH = 10
   const bx = p.x + n.x * side * 36, bz = p.z + n.z * side * 36, by = p.y + 17 + (i % 3) * 3
   const board = new THREE.Mesh(boardGeo, billboardMats[i % billboardMats.length])
   board.scale.set(boardW, boardH, 1)
@@ -504,109 +514,196 @@ starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPosit
 scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: '#a3c9ff', size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.72 })))
 
 // ── SUPERCAR MODEL ───────────────────────────────────────────────────
-// Low-poly lofted supercar. Local +Z is the nose, +Y up, wheels sit on y = 0.
-// The root `car` group is placed/oriented by the game loop; everything below is local.
+// Dark metallic supercar with cyan and magenta accent lighting.
 const car = new THREE.Group()
 scene.add(car)
-const model = new THREE.Group()
-car.add(model)
 
-const bodyMat = new THREE.MeshPhysicalMaterial({ color: '#10162a', metalness: 0.7, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.12, envMap: envTex, envMapIntensity: 0.4, flatShading: true, side: THREE.DoubleSide })
-const glassMat = new THREE.MeshPhysicalMaterial({ color: '#07182a', metalness: 0.6, roughness: 0.08, clearcoat: 1, envMap: envTex, envMapIntensity: 0.7, flatShading: true, side: THREE.DoubleSide })
-const carbonMat = new THREE.MeshStandardMaterial({ color: '#0a0e18', metalness: 0.5, roughness: 0.42 })
-const accentCyan = new THREE.MeshBasicMaterial({ color: '#19e6ff', toneMapped: false })
-const accentMagenta = new THREE.MeshBasicMaterial({ color: '#ff2d9a', toneMapped: false })
-const rubberMat = new THREE.MeshStandardMaterial({ color: '#07090e', roughness: 0.9 })
-const rimMat = new THREE.MeshStandardMaterial({ color: '#c3cde0', metalness: 0.85, roughness: 0.25, envMap: envTex })
-const rimDarkMat = new THREE.MeshStandardMaterial({ color: '#0d111c', metalness: 0.6, roughness: 0.4 })
-const headlightMat = new THREE.MeshBasicMaterial({ color: '#eaffff', toneMapped: false })
-const taillightMat = new THREE.MeshBasicMaterial({ color: '#ff1330', toneMapped: false })
+// Materials palette
+const bodyMat = new THREE.MeshPhysicalMaterial({ color: '#1a1e2e', metalness: 0.92, roughness: 0.18, clearcoat: 1.0, clearcoatRoughness: 0.08 })
+const accentCyan = new THREE.MeshStandardMaterial({ color: '#00dfff', emissive: '#00dfff', emissiveIntensity: 1.2, metalness: 0.4, roughness: 0.3 })
+const accentMagenta = new THREE.MeshStandardMaterial({ color: '#ff168f', emissive: '#ff168f', emissiveIntensity: 1.2, metalness: 0.4, roughness: 0.3 })
+const carbonMat = new THREE.MeshStandardMaterial({ color: '#080d18', metalness: 0.68, roughness: 0.3 })
+const glassMat = new THREE.MeshPhysicalMaterial({ color: '#061522', metalness: 0.55, roughness: 0.12, clearcoat: 1, transparent: true, opacity: 0.92 })
+const rubberMat = new THREE.MeshStandardMaterial({ color: '#05070c', roughness: 0.83 })
+const rimMat = new THREE.MeshStandardMaterial({ color: '#9aa9c0', metalness: 0.92, roughness: 0.22 })
+const darkMetalMat = new THREE.MeshStandardMaterial({ color: '#252d3e', metalness: 0.88, roughness: 0.28 })
+const headlightMat = new THREE.MeshBasicMaterial({ color: '#b9fbff', toneMapped: false })
+const taillightMat = new THREE.MeshBasicMaterial({ color: '#ff1744', toneMapped: false })
+const taillightGlowMat = new THREE.MeshStandardMaterial({ color: '#ff0033', emissive: '#ff0033', emissiveIntensity: 3.0, roughness: 0.4 })
+const underglowMat = new THREE.MeshBasicMaterial({ color: '#ff168f', transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false })
 
-// Loft cross-sections (8-point rings) along Z into a flat-shaded low-poly shell.
-function loft(stations, material) {
-  const ring = (w, yb, yt) => { const h = yt - yb; return [[-w * 0.82, yb], [w * 0.82, yb], [w, yb + h * 0.3], [w * 0.93, yb + h * 0.72], [w * 0.55, yt], [-w * 0.55, yt], [-w * 0.93, yb + h * 0.72], [-w, yb + h * 0.3]] }
-  const pos = [], idx = []
-  for (const [z, w, yb, yt] of stations) for (const [x, y] of ring(w, yb, yt)) pos.push(x, y, z)
-  const n = stations.length
-  for (let st = 0; st < n - 1; st++) for (let k = 0; k < 8; k++) {
-    const a = st * 8 + k, b = st * 8 + (k + 1) % 8, c = (st + 1) * 8 + k, d = (st + 1) * 8 + (k + 1) % 8
-    idx.push(a, c, b, b, c, d)
+function carPart(geometry, material, position, scale, rotation = null) {
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(...position)
+  if (scale) mesh.scale.set(...scale)
+  if (rotation) mesh.rotation.set(...rotation)
+  mesh.castShadow = true
+  mesh.receiveShadow = false // avoids self-shadow acne/shimmer on the body
+  car.add(mesh)
+  return mesh
+}
+
+// ─── BODY SHELL ──────────────────────────────────────────
+// Main central body – wide and low
+carPart(new THREE.BoxGeometry(2.04, 0.36, 4.50), bodyMat, [0, 0.66, 0])
+// Nose taper — narrowing front section
+carPart(new THREE.BoxGeometry(1.82, 0.22, 1.40), bodyMat, [0, 0.82, -1.50])
+// Nose tip — low sculpted front
+carPart(new THREE.BoxGeometry(1.60, 0.14, 0.60), bodyMat, [0, 0.73, -2.30])
+// Rear haunches — wider at back
+carPart(new THREE.BoxGeometry(2.12, 0.28, 1.20), bodyMat, [0, 0.78, 1.40])
+// Rear deck — raised lip
+carPart(new THREE.BoxGeometry(1.90, 0.12, 0.50), bodyMat, [0, 0.94, 1.80])
+
+// ─── FRONT SPLITTER AND AERO ─────────────────────────────
+carPart(new THREE.BoxGeometry(2.24, 0.08, 0.38), carbonMat, [0, 0.44, -2.35])
+// Front lip — cyan accent line
+carPart(new THREE.BoxGeometry(2.0, 0.04, 0.06), accentCyan, [0, 0.45, -2.55])
+
+// ─── SIDE SKIRTS ─────────────────────────────────────────
+for (const x of [-1, 1]) {
+  carPart(new THREE.BoxGeometry(0.10, 0.18, 3.60), carbonMat, [x * 1.01, 0.47, -0.10])
+  // Cyan accent stripe along the side
+  carPart(new THREE.BoxGeometry(0.04, 0.06, 2.80), accentCyan, [x * 1.04, 0.55, -0.10])
+}
+
+// ─── REAR DIFFUSER ───────────────────────────────────────
+carPart(new THREE.BoxGeometry(2.04, 0.10, 0.44), carbonMat, [0, 0.44, 2.30])
+// Diffuser fins
+for (const x of [-0.52, 0, 0.52]) {
+  carPart(new THREE.BoxGeometry(0.04, 0.08, 0.40), darkMetalMat, [x, 0.44, 2.30])
+}
+
+// ─── FENDER FLARES / WHEEL ARCHES ────────────────────────
+for (const x of [-1, 1]) {
+  // Front fender bulge
+  carPart(new THREE.BoxGeometry(0.22, 0.26, 0.90), bodyMat, [x * 0.96, 0.68, -1.35])
+  // Rear fender bulge — wider
+  carPart(new THREE.BoxGeometry(0.26, 0.28, 0.95), bodyMat, [x * 0.98, 0.68, 1.35])
+  // Fender vent slats
+  carPart(new THREE.BoxGeometry(0.06, 0.10, 0.30), accentCyan, [x * 1.06, 0.72, -0.70])
+}
+
+// ─── WINDSHIELD / CANOPY ─────────────────────────────────
+const canopyGeometry = new THREE.BufferGeometry()
+const canopyVertices = new Float32Array([
+  // Windshield face
+  -0.76, 0.90, -1.10,   0.76, 0.90, -1.10,   -0.56, 1.50, -0.30,   0.56, 1.50, -0.30,
+  // Roof panel
+  -0.56, 1.50, -0.30,   0.56, 1.50, -0.30,   -0.62, 1.44, 0.60,   0.62, 1.44, 0.60,
+  // Left side glass
+  -0.76, 0.90, -1.10,  -0.56, 1.50, -0.30,  -0.62, 1.44, 0.60,  -0.88, 0.90, 0.80,
+  // Right side glass
+   0.76, 0.90, -1.10,   0.88, 0.90, 0.80,    0.62, 1.44, 0.60,   0.56, 1.50, -0.30,
+  // Rear glass
+  -0.88, 0.90, 0.80,   -0.62, 1.44, 0.60,    0.62, 1.44, 0.60,   0.88, 0.90, 0.80
+])
+const canopyIndices = [0,1,2,1,3,2, 4,5,6,5,7,6, 8,9,10,8,10,11, 12,13,14,12,14,15, 16,17,18,16,18,19]
+canopyGeometry.setAttribute('position', new THREE.BufferAttribute(canopyVertices, 3))
+canopyGeometry.setIndex(canopyIndices)
+canopyGeometry.computeVertexNormals()
+carPart(canopyGeometry, glassMat, [0, 0, 0])
+
+// Windshield frame
+carPart(new THREE.BoxGeometry(1.56, 0.06, 0.08), darkMetalMat, [0, 0.91, -1.10])
+// Roof spine
+carPart(new THREE.BoxGeometry(0.06, 0.04, 1.30), darkMetalMat, [0, 1.50, 0.08])
+// Rear glass frame
+carPart(new THREE.BoxGeometry(1.80, 0.06, 0.08), carbonMat, [0, 1.34, 0.72])
+
+// ─── REAR WING ───────────────────────────────────────────
+// Wing mounts — two pylons
+for (const x of [-0.60, 0.60]) {
+  carPart(new THREE.BoxGeometry(0.08, 0.32, 0.08), carbonMat, [x, 1.06, 1.90])
+}
+// Wing blade — wide and thin
+carPart(new THREE.BoxGeometry(2.20, 0.08, 0.36), carbonMat, [0, 1.24, 1.90], null, [-0.06, 0, 0])
+// Wing endplates
+for (const x of [-1, 1]) {
+  carPart(new THREE.BoxGeometry(0.04, 0.14, 0.38), carbonMat, [x * 1.10, 1.22, 1.90])
+}
+// Wing accent — magenta glow strip
+carPart(new THREE.BoxGeometry(1.90, 0.03, 0.06), accentMagenta, [0, 1.18, 2.08])
+
+// ─── WHEELS (4x) ─────────────────────────────────────────
+const wheelMeshes = []
+const wheelPositions = [
+  [-0.94, 0.39, -1.40],
+  [ 0.94, 0.39, -1.40],
+  [-0.94, 0.39,  1.40],
+  [ 0.94, 0.39,  1.40]
+]
+for (const [wx, wy, wz] of wheelPositions) {
+  // Tire
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.39, 0.39, 0.26, 28), rubberMat)
+  wheel.rotation.z = Math.PI / 2
+  wheel.position.set(wx, wy, wz)
+  wheel.castShadow = true
+  car.add(wheel)
+  wheelMeshes.push(wheel)
+  // Rim
+  const sideSign = Math.sign(wx)
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.27, 24), rimMat)
+  rim.rotation.z = Math.PI / 2
+  rim.position.set(wx + sideSign * 0.01, wy, wz)
+  car.add(rim)
+  // Hub
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.28, 16), darkMetalMat)
+  hub.rotation.z = Math.PI / 2
+  hub.position.set(wx + sideSign * 0.02, wy, wz)
+  car.add(hub)
+  // 5 spokes
+  for (let spoke = 0; spoke < 5; spoke++) {
+    const angle = spoke * Math.PI * 2 / 5
+    const spokeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.30, 0.04), rimMat)
+    spokeMesh.position.set(wx + sideSign * 0.025, wy + Math.sin(angle) * 0.12, wz + Math.cos(angle) * 0.12)
+    spokeMesh.rotation.x = -angle
+    car.add(spokeMesh)
   }
-  for (const [st, flip] of [[0, 1], [n - 1, 0]]) { // end caps
-    const [z, , yb, yt] = stations[st]; const c = pos.length / 3
-    pos.push(0, (yb + yt) / 2, z)
-    for (let k = 0; k < 8; k++) idx.push(c, st * 8 + k, st * 8 + (k + 1) % 8)
-    if (flip) idx.splice(idx.length - 24, 24, ...Array.from({ length: 8 }, (_, k) => [c, st * 8 + (k + 1) % 8, st * 8 + k]).flat())
-  }
-  const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx)
-  const flat = g.toNonIndexed(); flat.computeVertexNormals()
-  const mesh = new THREE.Mesh(flat, material); model.add(mesh); return mesh
+  // Brake caliper accent — tiny cyan block visible through spokes
+  const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.10, 0.14), accentCyan)
+  caliper.position.set(wx + sideSign * 0.015, wy - 0.08, wz)
+  car.add(caliper)
 }
-function part(geometry, material, x, y, z, rx = 0, ry = 0, rz = 0) {
-  const m = new THREE.Mesh(geometry, material); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); model.add(m); return m
-}
-const box = (w, h, d) => new THREE.BoxGeometry(w, h, d)
+const wheelMeshesForSpin = wheelMeshes
 
-// Main shell (z, halfWidth, yBottom, yTop): rear → nose, with wide rear haunches and a low sloped nose.
-loft([[-2.25, 0.85, 0.35, 0.85], [-1.6, 1.02, 0.30, 1.0], [-0.6, 1.0, 0.28, 0.95], [0.4, 0.96, 0.27, 0.82], [1.4, 0.94, 0.27, 0.68], [2.0, 0.82, 0.30, 0.52], [2.32, 0.6, 0.32, 0.42]], bodyMat)
-// Cabin / canopy (glass), embedded into the shell.
-loft([[-1.0, 0.72, 0.7, 0.97], [-0.45, 0.62, 0.7, 1.17], [0.3, 0.6, 0.7, 1.15], [1.0, 0.68, 0.7, 0.80]], glassMat)
+// ─── HEADLIGHTS ──────────────────────────────────────────
+// Dual thin DRL-style headlights — cyan signature
+carPart(new THREE.BoxGeometry(0.58, 0.08, 0.05), headlightMat, [-0.52, 0.77, -2.55])
+carPart(new THREE.BoxGeometry(0.58, 0.08, 0.05), headlightMat, [ 0.52, 0.77, -2.55])
+// Lower headlight accent bars
+carPart(new THREE.BoxGeometry(0.40, 0.04, 0.04), accentCyan, [-0.52, 0.70, -2.56])
+carPart(new THREE.BoxGeometry(0.40, 0.04, 0.04), accentCyan, [ 0.52, 0.70, -2.56])
+// Headlight point light for forward illumination
+const headlightGlow = new THREE.PointLight(0x9ef5ff, 12, 25)
+headlightGlow.position.set(0, 0.76, -3.0)
+car.add(headlightGlow)
 
-// Side detail: sill stripes, door vents, wheel-arch lips.
-for (const sd of [-1, 1]) {
-  part(box(0.05, 0.04, 2.7), accentMagenta, sd * 0.93, 0.37, 0.0)
-  part(box(0.04, 0.12, 0.7), carbonMat, sd * 0.99, 0.62, -0.95)
-  part(box(0.04, 0.03, 0.5), accentCyan, sd * 0.995, 0.7, -0.95)
-  for (const z of [-1.4, 1.4]) part(new THREE.TorusGeometry(0.45, 0.04, 4, 14, Math.PI), carbonMat, sd * 0.93, 0.37, z, 0, Math.PI / 2, 0)
-  part(box(0.04, 0.02, 1.1), accentCyan, sd * 0.2, 0.775, 0.95, 0.14, 0, 0) // hood stripes
-}
-// Front: splitter, DRL headlights, intake.
-part(box(1.75, 0.045, 0.55), carbonMat, 0, 0.26, 2.2)
-part(box(1.6, 0.03, 0.05), accentCyan, 0, 0.29, 2.5)
-part(box(0.9, 0.08, 0.05), carbonMat, 0, 0.4, 2.3)
-for (const sd of [-1, 1]) {
-  part(box(0.36, 0.07, 0.14), headlightMat, sd * 0.5, 0.52, 2.0, 0.3, 0, 0)
-  part(box(0.3, 0.025, 0.1), accentCyan, sd * 0.5, 0.45, 2.1, 0.3, 0, 0)
-}
-// Rear: spoiler (pylons, blade, end plates), diffuser, LED taillights.
-for (const sd of [-1, 1]) {
-  part(box(0.07, 0.3, 0.1), carbonMat, sd * 0.55, 1.0, -2.05)
-  part(box(0.05, 0.22, 0.5), carbonMat, sd * 1.0, 1.2, -2.1)
-}
-part(box(2.0, 0.05, 0.46), carbonMat, 0, 1.18, -2.1, -0.1, 0, 0)
-part(box(1.9, 0.025, 0.04), accentMagenta, 0, 1.15, -2.33)
-part(box(1.7, 0.08, 0.5), carbonMat, 0, 0.3, -2.3)
-part(box(1.55, 0.075, 0.05), taillightMat, 0, 0.74, -2.27)
-for (const sd of [-1, 1]) {
-  part(box(0.32, 0.12, 0.05), taillightMat, sd * 0.62, 0.64, -2.27)
-  part(box(0.12, 0.1, 0.08), taillightMat, sd * 0.82, 0.8, -2.2)
-}
-
-// Four wheels: each pivot holds a spin group (tire + rim + spokes); calipers stay fixed.
-const wheelMeshesForSpin = []
-for (const [wx, wz] of [[-0.98, 1.4], [0.98, 1.4], [-0.98, -1.4], [0.98, -1.4]]) {
-  const pivot = new THREE.Group(); pivot.position.set(wx, 0.37, wz); model.add(pivot)
-  const spin = new THREE.Group(); pivot.add(spin)
-  const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.37, 0.37, 0.28, 20), rubberMat); tire.rotation.z = Math.PI / 2; spin.add(tire)
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.285, 12), rimDarkMat); disc.rotation.z = Math.PI / 2; spin.add(disc)
-  for (let k = 0; k < 3; k++) { const sp = new THREE.Mesh(box(0.3, 0.06, 0.5), rimMat); sp.rotation.x = k * Math.PI / 3; spin.add(sp) }
-  const caliper = new THREE.Mesh(box(0.06, 0.12, 0.2), accentCyan); caliper.position.set(Math.sign(wx) * 0.12, -0.12, 0.12); pivot.add(caliper)
-  wheelMeshesForSpin.push(spin)
-}
-part(new THREE.PlaneGeometry(1.7, 3.8), new THREE.MeshBasicMaterial({ color: '#ff168f', transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false }), 0, 0.08, 0, -Math.PI / 2, 0, 0) // underglow
-model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
-
-// Car lights: forward spot onto the road, soft red rear glow (brighter on brake).
-const headSpot = new THREE.SpotLight(0xcfeeff, 260, 75, 0.55, 0.7, 1.6)
-headSpot.position.set(0, 0.7, 2.2); headSpot.target.position.set(0, 0, 14)
-car.add(headSpot, headSpot.target)
-const tailGlow = new THREE.PointLight(0xff1330, 5, 11)
-tailGlow.position.set(0, 0.8, -3.2)
+// ─── TAILLIGHTS ──────────────────────────────────────────
+// Full-width LED tail strip — bright red
+carPart(new THREE.BoxGeometry(1.70, 0.08, 0.05), taillightMat, [0, 0.84, 2.32])
+// Additional tail glow strips for LED effect
+carPart(new THREE.BoxGeometry(0.60, 0.04, 0.04), taillightGlowMat, [-0.42, 0.90, 2.33])
+carPart(new THREE.BoxGeometry(0.60, 0.04, 0.04), taillightGlowMat, [ 0.42, 0.90, 2.33])
+// Tail light point glow
+const tailGlow = new THREE.PointLight(0xff1744, 8, 12)
+tailGlow.position.set(0, 0.84, 2.8)
 car.add(tailGlow)
-car.rotation.order = 'YXZ' // heading (Y) first, then pitch/roll in the car's own frame
 
-// ── SKID MARKS ───────────────────────────────────────────────────────
+// ─── FRONT GRILLE VENTS ──────────────────────────────────
+for (const x of [-0.55, -0.28, 0, 0.28, 0.55]) {
+  carPart(new THREE.BoxGeometry(0.14, 0.04, 0.04), carbonMat, [x, 0.50, -2.50])
+}
+
+// ─── SIDE MARKERS ────────────────────────────────────────
+for (const x of [-1, 1]) {
+  carPart(new THREE.BoxGeometry(0.06, 0.04, 0.28), accentCyan, [x * 1.04, 0.62, -0.50])
+}
+
+// ─── UNDERBODY NEON ──────────────────────────────────────
+carPart(new THREE.PlaneGeometry(1.8, 3.80), underglowMat, [0, 0.38, 0], null, [-Math.PI / 2, 0, 0])
+
+// ─── SKID MARKS ──────────────────────────────────────────
 const skidMarks = []
 for (let i = 0; i < 2; i++) {
   const mark = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 4), new THREE.MeshBasicMaterial({ color: '#15141b', transparent: true, opacity: 0.65, depthWrite: false }))
@@ -615,17 +712,6 @@ for (let i = 0; i < 2; i++) {
   scene.add(mark)
   skidMarks.push(mark)
 }
-
-// ── SPEED STREAKS (subtle, kept off the car's lane) ──────────────────
-const streakCount = 70
-const streakPos = new Float32Array(streakCount * 6)
-const streakSeed = Array.from({ length: streakCount }, () => ({ x: 0, y: -999, z: 0 }))
-const streakGeo = new THREE.BufferGeometry()
-streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3))
-const streakMat = new THREE.LineBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })
-const streaks = new THREE.LineSegments(streakGeo, streakMat)
-streaks.frustumCulled = false
-scene.add(streaks)
 
 // ── INITIAL POSITION AND CONTROLS ────────────────────────────────────
 const startPoint = centerline.getPointAt(0.015)
@@ -652,21 +738,17 @@ let lastT = 0.015
 let raceStarted = false
 let finished = false
 let handbrakeWasDown = false
+let raceStartMs = 0, topKmh = 0
 const clock = new THREE.Timer()
 const cameraTarget = new THREE.Vector3()
 const cameraPos = new THREE.Vector3()
-const lookPos = new THREE.Vector3()
-const camOff = new THREE.Vector3(-Math.sin(heading) * 8.6, 3.5, -Math.cos(heading) * 8.6)
-const lookOff = new THREE.Vector3(Math.sin(heading) * 5, 1.0, Math.cos(heading) * 5)
-let camRoll = 0
 cameraPos.set(
-  car.position.x - Math.sin(heading) * 8.6,
-  car.position.y + 3.5,
-  car.position.z - Math.cos(heading) * 8.6
+  car.position.x - Math.sin(heading) * 8,
+  car.position.y + 4.3,
+  car.position.z - Math.cos(heading) * 8
 )
 camera.position.copy(cameraPos)
-lookPos.set(car.position.x + Math.sin(heading) * 5, car.position.y + 1.0, car.position.z + Math.cos(heading) * 5)
-camera.lookAt(lookPos)
+camera.lookAt(car.position.x, car.position.y + 0.8, car.position.z)
 const speedEl = document.querySelector('#speed')
 const speedFill = document.querySelector('#speed-fill')
 const lapEl = document.querySelector('#lap')
@@ -675,6 +757,100 @@ const message = document.querySelector('#message')
 const statusEl = document.querySelector('#race-status')
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)) }
+
+// ── ROAD PROJECTION ──────────────────────────────────────────────────
+// Exact position on the centerline polyline: nearest *segment* (not nearest sample) near the last
+// known index, so lateral offset, height and tangent are continuous around the whole closed loop.
+const proj = { index: 0, t: 0, lateral: 0, distance: 0, y: 0, tx: 0, tz: 1, nx: 1, nz: 0, slope: 0, tangent: new THREE.Vector3() }
+let projHint = nearestTrackPoint(car.position).index
+function projectToTrack(x, z) {
+  const N = sampleCount
+  let best = projHint, bs = Infinity
+  for (let k = -20; k <= 20; k++) {
+    const i = (projHint + k + N) % N, q = trackPoints[i]
+    const d = (x - q.x) ** 2 + (z - q.z) ** 2
+    if (d < bs) { bs = d; best = i }
+  }
+  if (bs > 1600) best = nearestTrackPoint({ x, y: car.position.y, z }).index // lost the track → global search
+  let bi = best, bu = 0, bd = Infinity
+  for (const i of [(best - 1 + N) % N, best]) {
+    const a = trackPoints[i], b = trackPoints[(i + 1) % N]
+    const abx = b.x - a.x, abz = b.z - a.z
+    const u = clamp(((x - a.x) * abx + (z - a.z) * abz) / (abx * abx + abz * abz), 0, 1)
+    const d = (x - a.x - abx * u) ** 2 + (z - a.z - abz * u) ** 2
+    if (d < bd) { bd = d; bi = i; bu = u }
+  }
+  const j = (bi + 1) % N, a = trackPoints[bi], b = trackPoints[j], ta = trackTangents[bi], tb = trackTangents[j]
+  let tx = ta.x + (tb.x - ta.x) * bu, tz = ta.z + (tb.z - ta.z) * bu
+  const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl
+  const nx = -tz, nz = tx
+  proj.lateral = (x - (a.x + (b.x - a.x) * bu)) * nx + (z - (a.z + (b.z - a.z) * bu)) * nz
+  proj.y = a.y + (b.y - a.y) * bu
+  proj.slope = (b.y - a.y) / Math.hypot(b.x - a.x, b.z - a.z)
+  proj.tx = tx; proj.tz = tz; proj.nx = nx; proj.nz = nz
+  proj.index = bi; proj.t = ((bi + bu) / N) % 1; proj.distance = Math.abs(proj.lateral)
+  proj.tangent.set(tx, proj.slope, tz)
+  projHint = bi
+  return proj
+}
+
+// ── ARCADE PHYSICS ───────────────────────────────────────────────────
+// Velocity is a world vector (vx, vz) split each step into forward/lateral parts relative to the
+// heading: lateral grip bleeds the sideways part (planted car); the handbrake drops grip so the
+// car slides, and grip then recovers gradually. Fixed ≤1/90 s sub-steps keep it frame-rate stable.
+const MAX_SPEED = 112, REV_SPEED = 19
+let vx = 0, vz = 0, steerSm = 0, yawRate = 0, grip = 8.5, slip = 0, impact = 0
+function stepPhysics(h, inp) {
+  let fx = Math.sin(heading), fz = Math.cos(heading)
+  steerSm += (inp.steer - steerSm) * (1 - Math.exp(-8 * h))
+  const vf0 = vx * fx + vz * fz
+  const maxYaw = 2.81 / (1 + Math.abs(vf0) / 28) // steering gets less sensitive with speed
+  yawRate = steerSm * maxYaw * Math.min(1, Math.abs(vf0) / 7) * Math.sign(vf0 || 1) * (inp.handbrake ? 1.3 : 1)
+  heading += yawRate * h
+  fx = Math.sin(heading); fz = Math.cos(heading)
+  const rx = fz, rz = -fx
+  let vf = vx * fx + vz * fz, vl = vx * rx + vz * rz
+  if (inp.finished) vf *= Math.exp(-3 * h)
+  else {
+    if (inp.forward) vf += (vf < 0 ? 62 : 46 * Math.max(0, 1 - (vf / 114) ** 2)) * h
+    if (inp.reverse) vf -= (vf > 0.5 ? 62 : 34) * h
+    if (!inp.forward && !inp.reverse) vf *= Math.exp(-0.65 * h)
+    if (inp.handbrake) vf *= Math.exp(-0.5 * h)
+  }
+  vf = clamp(vf, -REV_SPEED, MAX_SPEED)
+  const gripTarget = inp.handbrake ? 2.6 : 8.5 // rear grip drops under handbrake, then recovers gradually
+  grip += (gripTarget - grip) * (1 - Math.exp(-(inp.handbrake ? 14 : 1.8) * h))
+  vl *= Math.exp(-grip * h)
+  vf *= Math.exp(-0.015 * Math.min(Math.abs(vl), 25) * h) // sliding scrubs speed
+  vx = vf * fx + vl * rx; vz = vf * fz + vl * rz
+  slip = Math.abs(vf) > 5 ? clamp(Math.abs(vl) / 12, 0, 1) : 0
+
+  car.position.x += vx * h; car.position.z += vz * h
+  const pr = projectToTrack(car.position.x, car.position.z)
+  // Wall limit accounts for the car's yawed footprint (half-width 0.95, half-length 2.2) so corners
+  // never poke through the guardrail (inner rail face is at halfRoad + 1.5).
+  const limit = halfRoad + 1.4 - (0.95 * Math.abs(fx * pr.tx + fz * pr.tz) + 2.2 * Math.abs(fx * pr.nx + fz * pr.nz))
+  const over = Math.abs(pr.lateral) - limit
+  if (over > 0) {
+    const sg = Math.sign(pr.lateral), ox = pr.nx * sg, oz = pr.nz * sg // outward wall normal
+    car.position.x -= ox * over; car.position.z -= oz * over; pr.lateral -= sg * over // minimal push-out
+    const vn = vx * ox + vz * oz
+    if (vn > 0) {
+      vx -= 1.2 * vn * ox; vz -= 1.2 * vn * oz // soft bounce
+      const k = 1 - Math.min(0.35, vn * 0.012); vx *= k; vz *= k // wall scrape
+      const dirAngle = Math.atan2(pr.tx, pr.tz) + ((vx * pr.tx + vz * pr.tz) >= 0 ? 0 : Math.PI)
+      heading += Math.atan2(Math.sin(dirAngle - heading), Math.cos(dirAngle - heading)) * Math.min(0.5, vn * 0.03) // slide along the wall
+      impact = Math.max(impact, vn)
+    }
+  }
+  car.position.y = pr.y + 0.03 // exact road height: no lag through climbs/crests
+  speed = vx * Math.sin(heading) + vz * Math.cos(heading)
+}
+let camAng = heading
+const lightOffset = new THREE.Vector3(-80, 150, 45), snapV = new THREE.Vector3()
+const lightDir = lightOffset.clone().normalize()
+const lightRight = new THREE.Vector3(0, 1, 0).cross(lightDir).normalize(), lightUp = lightDir.clone().cross(lightRight).normalize()
+let tailLevel = 0 // smoothed brake-light level (was a hard 8↔18 intensity jump = visible flash)
 
 // ── ANIMATION LOOP ───────────────────────────────────────────────────
 function animate() {
@@ -688,43 +864,26 @@ function animate() {
   const left = Boolean(keys.KeyA || keys.a || keys.ArrowLeft)
   const right = Boolean(keys.KeyD || keys.d || keys.ArrowRight)
   const handbrake = Boolean(keys.Space)
-  if (forward || reverse) raceStarted = true
+  if (forward || reverse) { if (!raceStarted) raceStartMs = performance.now(); raceStarted = true }
 
   // ── PHYSICS ──────────────────────────────────────────────
-  if (!finished) {
-    if (forward) speed += 39 * dt
-    else speed *= Math.pow(0.989, dt * 60)
-    if (reverse) speed -= 52 * dt
-    speed = clamp(speed, -19, 112)
-    if (handbrake) speed *= Math.pow(0.89, dt * 60)
-  } else {
-    speed *= Math.pow(0.94, dt * 60)
-  }
-
-  const steer = Number(right) - Number(left)
-  const steeringResponse = 1.5 + Math.abs(speed) * 0.018
-  if (left) heading += steeringResponse * dt * Math.sign(speed || 1)
-  if (right) heading -= steeringResponse * dt * Math.sign(speed || 1)
-  const oldPosition = car.position.clone()
-  car.position.x += Math.sin(heading) * speed * dt
-  car.position.z += Math.cos(heading) * speed * dt
-
-  const nearest = nearestTrackPoint(car.position)
-  const onRoad = Math.abs(nearest.lateral) <= halfRoad + 1.5 && nearest.distance < 18
-  if (!onRoad) {
-    car.position.copy(oldPosition)
-    speed *= -0.22
-  }
-  const grounded = nearestTrackPoint(car.position)
-  car.position.y = THREE.MathUtils.damp(car.position.y, grounded.point.y + 0.03, 9, dt)
+  const steer = Number(left) - Number(right) // + = left (heading increases)
+  const inp = { forward, reverse, handbrake, steer, finished }
+  const sub = Math.max(1, Math.ceil(dt / (1 / 90)))
+  impact = 0
+  for (let n = 0; n < sub; n++) stepPhysics(dt / sub, inp)
+  const grounded = proj
   car.rotation.y = heading
-  // Slope along the car's own heading (track tangent may point either way), nose-up on climbs.
-  const fwdX = Math.sin(heading), fwdZ = Math.cos(heading)
-  const along = grounded.tangent.x * fwdX + grounded.tangent.z * fwdZ
-  const slope = grounded.tangent.y * Math.sign(along || 1) / Math.max(0.2, Math.hypot(grounded.tangent.x, grounded.tangent.z))
-  car.rotation.z = THREE.MathUtils.damp(car.rotation.z, steer * -0.035 * Math.min(1, Math.abs(speed) / 25), 8, dt)
-  car.rotation.x = THREE.MathUtils.damp(car.rotation.x, -Math.atan(slope), 6, dt)
-  for (const wheel of wheelMeshesForSpin) wheel.rotation.x += speed * dt / 0.37
+  const along = grounded.tx * Math.sin(heading) + grounded.tz * Math.cos(heading)
+  car.rotation.z = THREE.MathUtils.damp(car.rotation.z, clamp(yawRate * speed * 0.0014, -0.07, 0.07), 7, dt) // body roll
+  car.rotation.x = THREE.MathUtils.damp(car.rotation.x, -Math.atan(grounded.slope * Math.sign(along || 1)), 8, dt)
+  for (const wheel of wheelMeshesForSpin) wheel.rotation.x -= speed * dt * 1.8
+  const totalSpeed = Math.hypot(vx, vz)
+  if (impact > 3) playCollision(impact)
+  // Simple 5-gear rpm model for the engine note
+  const gearTop = [26, 48, 70, 92, 112]; const g = gearTop.findIndex(v => Math.abs(speed) <= v), lo = g > 0 ? gearTop[g - 1] : 0
+  const rpm = clamp(0.2 + 0.8 * (Math.abs(speed) - lo) / (gearTop[Math.max(g, 0)] - lo), 0, 1)
+  updateAudio({ rpm, load: forward ? 1 : 0.15, speed01: totalSpeed / MAX_SPEED, slip: slip * (grip < 6 || slip > 0.5 ? 1 : 0.6), brake: (reverse && speed > 5) || handbrake ? 1 : 0 })
 
   // ── LAP COUNTING ─────────────────────────────────────────
   if (grounded.distance < 30) {
@@ -735,7 +894,8 @@ function animate() {
         finished = true
         statusEl.textContent = 'FINISH // RUN COMPLETE'
         message.textContent = 'CITY CONQUERED // RUN COMPLETE'
-        message.classList.add('visible')
+        message.classList.remove('visible')
+        showFinish({ time: (performance.now() - raceStartMs) / 1000, topKmh })
       }
     }
     if (grounded.t > 0.18 || grounded.t < lastT) lastT = grounded.t
@@ -744,7 +904,8 @@ function animate() {
   lapProgress.style.width = `${Math.round(grounded.t * 100)}%`
 
   // ── HUD UPDATE ───────────────────────────────────────────
-  const speedKmh = Math.round(Math.abs(speed) * 3.6)
+  const speedKmh = Math.round(totalSpeed * 3.6)
+  topKmh = Math.max(topKmh, speedKmh)
   speedEl.textContent = String(speedKmh).padStart(3, '0')
   speedFill.style.width = `${Math.min(100, speedKmh / 4.5)}%`
   if (raceStarted && !finished) {
@@ -752,8 +913,12 @@ function animate() {
     message.classList.toggle('visible', speedKmh < 3)
   }
 
-  // ── SKID MARKS ───────────────────────────────────────────
-  const justHandbraked = handbrake && !handbrakeWasDown && Math.abs(speed) > 18
+  // The model was authored nose-toward -Z, but the game drives toward +Z: rotate it once so the nose leads.
+{ const body = new THREE.Group(); body.rotation.y = Math.PI; for (const c of [...car.children]) body.add(c); car.add(body) }
+car.rotation.order = 'YXZ' // heading first, then pitch/roll in the car's own frame (was world-axis pitch)
+
+// ── SKID MARKS ───────────────────────────────────────────
+  const justHandbraked = handbrake && !handbrakeWasDown && totalSpeed > 18
   if (justHandbraked) {
     const rear = new THREE.Vector3(0, 0, -2.1).applyAxisAngle(new THREE.Vector3(0, 1, 0), heading).add(car.position)
     for (let i = 0; i < skidMarks.length; i++) {
@@ -766,46 +931,24 @@ function animate() {
   handbrakeWasDown = handbrake
 
   // ── CHASE CAMERA ─────────────────────────────────────────
-  // Speed pulls the camera back/up a little and widens FOV; look-ahead keeps the car low in frame.
-  const sp = clamp(Math.abs(speed) / 112, 0, 1)
-  const camDist = 8.6 + sp * 1.6
-  const camHeight = 3.5 + sp * 0.5
-  const hx = Math.sin(heading), hz = Math.cos(heading)
-  // Smooth the offset from the car (not the world position): heading changes swing the camera
-  // softly, but there is no distance lag at speed, so the car never drifts out of frame.
-  camOff.lerp(cameraTarget.set(-hx * camDist, camHeight, -hz * camDist), 1 - Math.exp(-5 * dt))
-  lookOff.lerp(cameraTarget.set(hx * 5, 1.0, hz * 5), 1 - Math.exp(-8 * dt))
-  cameraPos.copy(car.position).add(camOff)
+  // The camera's *angle* smooths toward the car heading (softer at speed, swings out in drifts);
+  // its position stays locked to the car, so it never falls behind or dips into the road.
+  const sp = clamp(totalSpeed / MAX_SPEED, 0, 1)
+  camAng += Math.atan2(Math.sin(heading - camAng), Math.cos(heading - camAng)) * (1 - Math.exp(-(6 - 2.5 * sp) * dt))
+  const camDist = 8.5 + sp * 1.0, camHeight = 4.3 + sp * 0.6
+  cameraPos.set(car.position.x - Math.sin(camAng) * camDist, car.position.y + camHeight, car.position.z - Math.cos(camAng) * camDist)
   camera.position.copy(cameraPos)
-  lookPos.copy(car.position).add(lookOff)
-  camera.lookAt(lookPos)
-  camRoll = THREE.MathUtils.damp(camRoll, steer * 0.022 * sp, 4, dt)
-  camera.rotateZ(camRoll)
-  camera.fov = THREE.MathUtils.damp(camera.fov, 62 + sp * 14, 3, dt)
+  cameraTarget.set(car.position.x + Math.sin(camAng) * 3, car.position.y + 0.9, car.position.z + Math.cos(camAng) * 3)
+  camera.lookAt(cameraTarget)
+  camera.fov = THREE.MathUtils.damp(camera.fov, 66 + sp * 11, 2.8, dt)
   camera.updateProjectionMatrix()
+
+  // Shadow camera follows the car, snapped to whole shadow-map texels in light space so edges don't crawl.
+  snapV.copy(car.position)
+  const sa = snapV.dot(lightRight), sb = snapV.dot(lightUp), texel = 90 / 1024
+  snapV.addScaledVector(lightRight, Math.round(sa / texel) * texel - sa).addScaledVector(lightUp, Math.round(sb / texel) * texel - sb)
+  moon.target.position.copy(snapV); moon.position.copy(snapV).add(lightOffset)
   sky.position.copy(camera.position)
-
-  // Speed streaks: recycled around the car, never in its lane; fade in above ~35% speed.
-  streakMat.opacity = clamp((sp - 0.35) * 0.5, 0, 0.28)
-  streaks.visible = streakMat.opacity > 0.01
-  if (streaks.visible) {
-    const len = 2 + sp * 9
-    for (let i = 0; i < streakCount; i++) {
-      const st = streakSeed[i]
-      const rel = (st.x - car.position.x) * hx + (st.z - car.position.z) * hz
-      if (st.y < -900 || rel < -20 || rel > 70) {
-        const lat = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 16)
-        const ahead = 25 + Math.random() * 40
-        st.x = car.position.x + hx * ahead + hz * lat; st.z = car.position.z + hz * ahead - hx * lat; st.y = car.position.y + 0.6 + Math.random() * 6
-      }
-      streakPos.set([st.x, st.y, st.z, st.x + hx * len, st.y, st.z + hz * len], i * 6)
-    }
-    streakGeo.attributes.position.needsUpdate = true
-  }
-
-  // Shadow frustum + moon follow the car so shadows stay sharp.
-  moon.position.set(car.position.x - 80, car.position.y + 150, car.position.z + 45)
-  moon.target.position.copy(car.position)
 
   // ── FOLLOW LIGHTS ────────────────────────────────────────
   cyanFill.position.set(car.position.x + 18, car.position.y + 16, car.position.z - 22)
@@ -813,12 +956,13 @@ function animate() {
 
   // ── TAILLIGHT INTENSITY — brighter when braking ─────────
   const braking = reverse || handbrake
-  tailGlow.intensity = braking ? 12 : 5
-  taillightMat.color.set(braking ? '#ff4a5e' : '#ff1330')
+  tailLevel += ((braking ? 1 : 0) - tailLevel) * (1 - Math.exp(-14 * dt))
+  tailGlow.intensity = 8 + tailLevel * 8
+  taillightGlowMat.emissiveIntensity = 3 + tailLevel * 1.8
 
   renderer.render(scene, camera)
 }
-if (import.meta.env.DEV) window.__ev = { car, camera, get speed() { return speed }, set speed(v) { speed = v }, get heading() { return heading }, renderer }
+if (import.meta.env.DEV) window.__ev = { scene, city, roadGroup, THREE, trackPoints, trackTangents, sampleCount, halfRoad, car, proj, camera, stepPhysics, projectToTrack, get state() { return { speed, vx, vz, heading, grip, slip, impact } }, set(x, z, h, v) { car.position.set(x, 0, z); heading = h; vx = Math.sin(h) * v; vz = Math.cos(h) * v; projHint = nearestTrackPoint(car.position).index; projectToTrack(x, z) } }
 animate()
 
 addEventListener('resize', () => {

@@ -14,18 +14,18 @@ document.querySelector('#app').innerHTML = `
       <div class="label">VELOCITY</div>
       <div class="speed"><span id="speed">000</span><small> KM/H</small></div>
       <div class="speedbar"><i id="speed-fill"></i></div>
-      <div class="lap">LAP <b id="lap">01</b><span> / 03</span></div>
-      <div class="progress"><i id="lap-progress"></i></div>
+      <div class="lap">LAPS COMPLETED <b id="lap">00</b><span> / 03</span></div>
+      <div class="progress"><i id="lap-progress"></i></div><div class="nitro-label" id="nitro-label">NITRO READY � SHIFT</div><div class="nitro-meter"><i id="nitro-fill"></i></div>
     </div>
     <div class="center-message" id="message">W /  TO START YOUR RUN</div>
     <div class="bottom">
       <div><kbd>W</kbd> / <kbd></kbd><span>THROTTLE</span></div>
       <div><kbd>A</kbd> <kbd>D</kbd> / <kbd></kbd> <kbd></kbd><span>STEER</span></div>
       <div><kbd>S</kbd> / <kbd></kbd><span>BRAKE / REVERSE</span></div>
-      <div><kbd>SPACE</kbd><span>HANDBRAKE</span></div>
+      <div><kbd>SPACE</kbd><span>HANDBRAKE</span></div><div><kbd>SHIFT</kbd><span>NITRO</span></div>
     </div>
     <div class="crosshair">EV <span>// 001</span></div>
-    <div class="vignette"></div>
+    <div class="vignette"></div><div class="nitro-screen" id="nitro-screen" aria-hidden="true"><i style="--angle:7deg;--delay:0s;--duration:0.35s"></i><i style="--angle:27deg;--delay:-0.11s;--duration:0.43s"></i><i style="--angle:47deg;--delay:-0.22s;--duration:0.51s"></i><i style="--angle:67deg;--delay:-0.33s;--duration:0.59s"></i><i style="--angle:87deg;--delay:-0.44s;--duration:0.35s"></i><i style="--angle:107deg;--delay:-0.55s;--duration:0.43s"></i><i style="--angle:127deg;--delay:-0.66s;--duration:0.51s"></i><i style="--angle:147deg;--delay:0s;--duration:0.59s"></i><i style="--angle:167deg;--delay:-0.11s;--duration:0.35s"></i><i style="--angle:187deg;--delay:-0.22s;--duration:0.43s"></i><i style="--angle:207deg;--delay:-0.33s;--duration:0.51s"></i><i style="--angle:227deg;--delay:-0.44s;--duration:0.59s"></i><i style="--angle:247deg;--delay:-0.55s;--duration:0.35s"></i><i style="--angle:267deg;--delay:-0.66s;--duration:0.43s"></i><i style="--angle:287deg;--delay:0s;--duration:0.51s"></i><i style="--angle:307deg;--delay:-0.11s;--duration:0.59s"></i><i style="--angle:327deg;--delay:-0.22s;--duration:0.35s"></i><i style="--angle:347deg;--delay:-0.33s;--duration:0.43s"></i></div>
   </div>
 `
 
@@ -333,7 +333,8 @@ function addGantry(t, color = '#00dfff', tunnel = false) {
     }
   }
 }
-addGantry(0.015, '#00dfff')
+const finishT = Math.round(0.015 * sampleCount) / sampleCount
+addGantry(finishT, '#00dfff')
 addGantry(0.315, '#ff168f')
 addGantry(0.72, '#ffb454', true)
 
@@ -718,8 +719,8 @@ for (let i = 0; i < 2; i++) {
 { const body = new THREE.Group(); body.rotation.y = Math.PI; for (const c of [...car.children]) body.add(c); car.add(body) }
 car.rotation.order = 'YXZ' // heading first, then pitch/roll in the car's own frame (was world-axis pitch)
 
-const startPoint = centerline.getPointAt(0.015)
-const startTangent = centerline.getTangentAt(0.015)
+const startPoint = centerline.getPointAt(finishT)
+const startTangent = centerline.getTangentAt(finishT)
 car.position.set(startPoint.x, startPoint.y + 0.03, startPoint.z)
 let heading = Math.atan2(startTangent.x, startTangent.z)
 car.rotation.y = heading
@@ -737,10 +738,14 @@ addEventListener('keyup', e => {
 addEventListener('blur', () => { for (const key of Object.keys(keys)) keys[key] = false })
 
 let speed = 0
-let lap = 1
-let lastT = 0.015
+let completedLaps = 0
+let raceProgress = 0
+let lastT = finishT
 let raceStarted = false
 let finished = false
+let finishResult = null
+let finishScreenAt = Infinity
+let previousFinishSide = 2.2
 let handbrakeWasDown = false
 let raceStartMs = 0, topKmh = 0
 const clock = new THREE.Timer()
@@ -802,28 +807,50 @@ function projectToTrack(x, z) {
 // Velocity is a world vector (vx, vz) split each step into forward/lateral parts relative to the
 // heading: lateral grip bleeds the sideways part (planted car); the handbrake drops grip so the
 // car slides, and grip then recovers gradually. Fixed �1/90 s sub-steps keep it frame-rate stable.
+let nitroCharge = 1
+const nitroLabel = document.querySelector('#nitro-label'), nitroFill = document.querySelector('#nitro-fill')
+const nitroScreen = document.querySelector('#nitro-screen')
+const boostFlames = new THREE.Group()
+for (const x of [-0.65, 0.65]) {
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.16, 1.8, 10), new THREE.MeshBasicMaterial({ color: '#35cfff', transparent: true, opacity: 0.85, depthWrite: false }))
+  flame.rotation.x = -Math.PI / 2
+  flame.position.set(x, 0.45, -3)
+  boostFlames.add(flame)
+}
+boostFlames.visible = false
+car.add(boostFlames)
 const MAX_SPEED = 112, REV_SPEED = 19
 let vx = 0, vz = 0, steerSm = 0, yawRate = 0, grip = 8.5, slip = 0, impact = 0
 function stepPhysics(h, inp) {
   let fx = Math.sin(heading), fz = Math.cos(heading)
-  steerSm += (inp.steer - steerSm) * (1 - Math.exp(-8 * h))
   const vf0 = vx * fx + vz * fz
-  const maxYaw = 2.81 / (1 + Math.abs(vf0) / 28) // steering gets less sensitive with speed
-  yawRate = steerSm * maxYaw * Math.min(1, Math.abs(vf0) / 7) * Math.sign(vf0 || 1) * (inp.handbrake ? 1.3 : 1)
+  const travelSpeed = Math.abs(vf0)
+  // Keyboard steering: quick centering and direction changes, progressive turn-in.
+  const steerResponse = inp.steer === 0 || inp.steer * steerSm < 0 ? 22 : 10
+  steerSm += (inp.steer - steerSm) * (1 - Math.exp(-steerResponse * h))
+  const boostSteering = inp.boost ? 1.15 : 1
+  const steerAngle = steerSm * 0.48 / (1 + travelSpeed / 55)
+  const bicycleYaw = vf0 / 2.8 * Math.tan(steerAngle)
+  // Arcade cornering budget limits abrupt high-speed spins while allowing tighter turns.
+  const yawLimit = Math.min(1.65, 88 / Math.max(travelSpeed, 1)) * boostSteering
+  const targetYaw = inp.finished ? 0 : clamp(bicycleYaw * (inp.handbrake ? 1.15 : 1), -yawLimit, yawLimit)
+  yawRate += (targetYaw - yawRate) * (1 - Math.exp(-20 * h))
   heading += yawRate * h
   fx = Math.sin(heading); fz = Math.cos(heading)
   const rx = fz, rz = -fx
   let vf = vx * fx + vz * fz, vl = vx * rx + vz * rz
   if (inp.finished) vf *= Math.exp(-3 * h)
   else {
-    if (inp.forward) vf += (vf < 0 ? 62 : 46 * Math.max(0, 1 - (vf / 114) ** 2)) * h
+    if (inp.forward) vf += (vf < 0 ? 62 : (inp.boost ? 46 : 38) * Math.max(0, 1 - (vf / 114) ** 2)) * h
+    if (inp.boost && vf > 0) vf += 38 * Math.max(0, 1 - (vf / 145) ** 2) * h
     if (inp.reverse) vf -= (vf > 0.5 ? 62 : 34) * h
-    if (!inp.forward && !inp.reverse) vf *= Math.exp(-0.65 * h)
+    if (!inp.forward && !inp.reverse) vf *= Math.exp(-0.28 * h)
     if (inp.handbrake) vf *= Math.exp(-0.5 * h)
   }
-  vf = clamp(vf, -REV_SPEED, MAX_SPEED)
-  const gripTarget = inp.handbrake ? 2.6 : 8.5 // rear grip drops under handbrake, then recovers gradually
-  grip += (gripTarget - grip) * (1 - Math.exp(-(inp.handbrake ? 14 : 1.8) * h))
+  if (!inp.boost && vf > MAX_SPEED) vf = MAX_SPEED + (vf - MAX_SPEED) * Math.exp(-1.8 * h)
+  vf = clamp(vf, -REV_SPEED, inp.boost ? 140 : Math.max(MAX_SPEED, vf))
+  const gripTarget = inp.handbrake ? 4.0 : 15 // deliberate drift, planted normal driving
+  grip += (gripTarget - grip) * (1 - Math.exp(-(inp.handbrake ? 14 : 8) * h))
   vl *= Math.exp(-grip * h)
   vf *= Math.exp(-0.015 * Math.min(Math.abs(vl), 25) * h) // sliding scrubs speed
   vx = vf * fx + vl * rx; vz = vf * fz + vl * rz
@@ -851,6 +878,12 @@ function stepPhysics(h, inp) {
   speed = vx * Math.sin(heading) + vz * Math.cos(heading)
 }
 let camAng = heading
+let cameraBoom = 9
+const cameraRay = new THREE.Raycaster(), boomDirection = new THREE.Vector3(), boomOrigin = new THREE.Vector3()
+const cameraObstacles = [roadGroup, city, ground]
+const boomOffsets = [new THREE.Vector3(), new THREE.Vector3(.4,0,0), new THREE.Vector3(-.4,0,0), new THREE.Vector3(0,.4,0), new THREE.Vector3(0,-.4,0)]
+const cameraHits = []
+scene.updateMatrixWorld(true)
 const lightOffset = new THREE.Vector3(-80, 150, 45), snapV = new THREE.Vector3()
 const lightDir = lightOffset.clone().normalize()
 const lightRight = new THREE.Vector3(0, 1, 0).cross(lightDir).normalize(), lightUp = lightDir.clone().cross(lightRight).normalize()
@@ -872,7 +905,16 @@ function animate() {
 
   // �� PHYSICS ����������������������������������������������
   const steer = Number(left) - Number(right) // + = left (heading increases)
-  const inp = { forward, reverse, handbrake, steer, finished }
+  const nitroDown = Boolean(keys.ShiftLeft || keys.ShiftRight)
+  const boosting = nitroDown && nitroCharge > 0 && forward && speed > 8 && !reverse && !handbrake && !finished
+  if (boosting) nitroCharge = Math.max(0, nitroCharge - dt / 2.5)
+  else if (!nitroDown && !finished) nitroCharge = Math.min(1, nitroCharge + dt / 6)
+  nitroScreen.classList.toggle('active', boosting)
+  boostFlames.visible = boosting
+  boostFlames.scale.z = 1 + Math.sin(performance.now() * 0.05) * 0.12
+  nitroLabel.textContent = boosting ? 'NITRO ACTIVE' : nitroCharge === 0 ? 'NITRO EMPTY � RELEASE SHIFT' : !nitroDown && nitroCharge < 1 ? 'NITRO RECHARGING � SHIFT TO BOOST' : 'NITRO READY � SHIFT'
+  nitroFill.style.width = (nitroCharge * 100) + '%'
+  const inp = { forward, reverse, handbrake, steer, finished, boost: boosting }
   const sub = Math.max(1, Math.ceil(dt / (1 / 90)))
   impact = 0
   for (let n = 0; n < sub; n++) stepPhysics(dt / sub, inp)
@@ -890,22 +932,40 @@ function animate() {
   updateAudio({ rpm, load: forward ? 1 : 0.15, speed01: totalSpeed / MAX_SPEED, slip: slip * (grip < 6 || slip > 0.5 ? 1 : 0.6), brake: (reverse && speed > 5) || handbrake ? 1 : 0 })
 
   // �� LAP COUNTING �����������������������������������������
-  if (grounded.distance < 30) {
-    if (lastT > 0.82 && grounded.t < 0.18 && speed > 1.5 && !finished) {
-      lap += 1
-      lapEl.textContent = String(Math.min(lap, 3)).padStart(2, '0')
-      if (lap > 3) {
-        finished = true
-        statusEl.textContent = 'FINISH // RUN COMPLETE'
-        message.textContent = 'CITY CONQUERED // RUN COMPLETE'
-        message.classList.remove('visible')
-        showFinish({ time: (performance.now() - raceStartMs) / 1000, topKmh })
-      }
+  if (!finished) {
+    // Signed progress prevents reverse crossings from adding laps.
+    let delta = grounded.t - lastT
+    if (delta < -0.5) delta += 1
+    if (delta > 0.5) delta -= 1
+    lastT = grounded.t
+    if (raceStarted && grounded.distance < 30) raceProgress += delta
+    // Count the nose crossing the visible gantry, not a rounded distance total.
+    const finishIndex = Math.round(finishT * sampleCount)
+    const finishPoint = trackPoints[finishIndex]
+    const finishTangent = trackTangents[finishIndex]
+    const finishSide = (car.position.x + Math.sin(heading) * 2.2 - finishPoint.x) * finishTangent.x
+      + (car.position.z + Math.cos(heading) * 2.2 - finishPoint.z) * finishTangent.z
+    if (raceStarted && grounded.distance < 30 && previousFinishSide <= 0 && finishSide > 0
+        && raceProgress > completedLaps + 0.9) {
+      completedLaps = Math.min(3, completedLaps + 1)
+      lapEl.textContent = String(completedLaps).padStart(2, '0')
     }
-    if (grounded.t > 0.18 || grounded.t < lastT) lastT = grounded.t
-    else lastT = grounded.t
+    previousFinishSide = finishSide
+    if (completedLaps === 3) {
+      finished = true
+      vx = 0; vz = 0; speed = 0
+      statusEl.textContent = 'FINISH // RUN COMPLETE'
+      message.classList.remove('visible')
+      const finishMs = performance.now()
+      finishResult = { time: (finishMs - raceStartMs) / 1000, topKmh }
+      finishScreenAt = finishMs + 2000
+    }
   }
-  lapProgress.style.width = `${Math.round(grounded.t * 100)}%`
+  if (finishResult && performance.now() >= finishScreenAt) {
+    showFinish(finishResult)
+    finishResult = null
+  }
+  lapProgress.style.width = `${finished ? 100 : Math.floor(Math.max(0, raceProgress - completedLaps) * 100)}%`
 
   // �� HUD UPDATE �������������������������������������������
   const speedKmh = Math.round(totalSpeed * 3.6)
@@ -935,13 +995,27 @@ function animate() {
   // The camera's *angle* smooths toward the car heading (softer at speed, swings out in drifts);
   // its position stays locked to the car, so it never falls behind or dips into the road.
   const sp = clamp(totalSpeed / MAX_SPEED, 0, 1)
-  camAng += Math.atan2(Math.sin(heading - camAng), Math.cos(heading - camAng)) * (1 - Math.exp(-(6 - 2.5 * sp) * dt))
-  const camDist = 8.5 + sp * 1.0, camHeight = 4.3 + sp * 0.6
+  camAng += Math.atan2(Math.sin(heading - camAng), Math.cos(heading - camAng)) * (1 - Math.exp(-(10 - 2 * sp) * dt))
+  const camDist = 8.5 + sp * 1.0 + (boosting ? 1 : 0), camHeight = 4.3 + sp * 0.6
   cameraPos.set(car.position.x - Math.sin(camAng) * camDist, car.position.y + camHeight, car.position.z - Math.cos(camAng) * camDist)
-  camera.position.copy(cameraPos)
+  // Probe the camera boom and its near-plane margin; retract immediately,
+  // then ease outward only after clearance has been checked again.
+  boomOrigin.copy(car.position).add(new THREE.Vector3(0, 1.2, 0))
+  boomDirection.subVectors(cameraPos, boomOrigin)
+  let safeBoom = boomDirection.length()
+  boomDirection.normalize()
+  for (const offset of boomOffsets) {
+    cameraRay.set(new THREE.Vector3().copy(boomOrigin).add(offset), boomDirection)
+    cameraRay.near = 0; cameraRay.far = safeBoom + 0.6
+    cameraHits.length = 0
+    cameraRay.intersectObjects(cameraObstacles, true, cameraHits)
+    if (cameraHits.length) safeBoom = Math.min(safeBoom, Math.max(0.05, cameraHits[0].distance - 0.6))
+  }
+  cameraBoom = safeBoom < cameraBoom ? safeBoom : THREE.MathUtils.damp(cameraBoom, safeBoom, 3, dt)
+  camera.position.copy(boomOrigin).addScaledVector(boomDirection, cameraBoom)
   cameraTarget.set(car.position.x + Math.sin(camAng) * 3, car.position.y + 0.9, car.position.z + Math.cos(camAng) * 3)
   camera.lookAt(cameraTarget)
-  camera.fov = THREE.MathUtils.damp(camera.fov, 66 + sp * 11, 2.8, dt)
+  camera.fov = THREE.MathUtils.damp(camera.fov, 66 + sp * 11 + (boosting ? 5 : 0), 2.8, dt)
   camera.updateProjectionMatrix()
 
   // Shadow camera follows the car, snapped to whole shadow-map texels in light space so edges don't crawl.

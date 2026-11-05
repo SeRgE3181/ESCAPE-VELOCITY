@@ -1,4 +1,4 @@
-// Full-screen finish sequence: flash → neon wipes → "RACE OVER" slams in → "CITY CONQUERED" expands → stats.
+// Full-screen finish sequence: flash  neon wipes  "RACE OVER" slams in  "CITY CONQUERED" expands  stats.
 const CSS = `
 #fin{position:fixed;inset:0;z-index:50;overflow:hidden;font-family:Orbitron,'Arial Black',Impact,sans-serif;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
 #fin .bg{position:absolute;inset:0;background:radial-gradient(ellipse at center,#0a1030f2 0%,#02030bfa 75%);animation:fin-bg .7s ease-out both}
@@ -9,7 +9,7 @@ const CSS = `
 #fin .w2{background:linear-gradient(90deg,transparent,#ff2d9a 40%,#ff2d9acc 60%,transparent);animation-delay:.14s}
 #fin .streak{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#00e5ff,transparent);opacity:0;animation:fin-streak 1.4s linear infinite}
 #fin .t1{position:relative;font-size:clamp(46px,14vw,250px);font-weight:900;line-height:.95;letter-spacing:.02em;display:flex;gap:.02em;text-shadow:0 0 30px #00e5ff99,0 0 80px #ff2d9a66}
-#fin .t1 span{display:inline-block;opacity:0;animation:fin-slam .55s cubic-bezier(.2,1.4,.3,1) forwards;animation-delay:calc(.75s + var(--i)*.06s)}
+#fin .t1 span{display:inline-block;opacity:1;animation:fin-slam .2s ease-out both}
 #fin .t1.glitch{animation:fin-glitch 2.6s steps(1) 1.6s infinite}
 #fin .t2{position:relative;margin-top:1.2vh;font-size:clamp(20px,5.2vw,92px);font-weight:800;white-space:nowrap;background:linear-gradient(90deg,#00e5ff,#ffffff 50%,#ff2d9a);-webkit-background-clip:text;background-clip:text;color:transparent;animation:fin-t2 1.1s cubic-bezier(.2,.9,.2,1) 1.45s both}
 #fin .line{width:0;height:3px;margin-top:2.4vh;background:linear-gradient(90deg,#00e5ff,#ff2d9a);box-shadow:0 0 18px #00e5ff;animation:fin-line 1s ease-out 1.9s forwards}
@@ -19,7 +19,7 @@ const CSS = `
 @keyframes fin-bg{from{opacity:0}to{opacity:1}}@keyframes fin-fade{from{opacity:0}to{opacity:1}}
 @keyframes fin-flash{from{opacity:.9}to{opacity:0}}
 @keyframes fin-wipe{from{left:-70%}to{left:130%}}
-@keyframes fin-slam{0%{opacity:0;transform:translateY(-60%) scale(2.6);filter:blur(18px)}60%{opacity:1;filter:blur(0)}100%{opacity:1;transform:none;filter:blur(0)}}
+@keyframes fin-slam{0%{opacity:1;transform:scale(1.04)}100%{opacity:1;transform:none}}
 @keyframes fin-glitch{0%,92%,100%{transform:none;text-shadow:0 0 30px #00e5ff99,0 0 80px #ff2d9a66}93%{transform:translateX(-.02em) skewX(-4deg);text-shadow:.04em 0 #ff2d9a,-.04em 0 #00e5ff}95%{transform:translateX(.03em);text-shadow:-.05em 0 #ff2d9a,.05em 0 #00e5ff}97%{transform:none}}
 @keyframes fin-t2{0%{opacity:0;letter-spacing:.9em;filter:blur(10px)}100%{opacity:1;letter-spacing:.22em;filter:blur(0)}}
 @keyframes fin-line{to{width:min(70vw,900px)}}

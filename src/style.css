@@ -62,3 +62,12 @@ kbd { padding: 4px 5px; border: 1px solid #60708a66; border-radius: 3px; backgro
   .bottom span { margin-top: 5px; font-size: 7px; }
   .crosshair { display: none; }
 }
+
+.nitro-label{margin-top:18px;color:#49dfff;font:700 10px Orbitron,sans-serif;letter-spacing:1px}.nitro-meter{height:4px;margin-top:8px;background:#123044;overflow:hidden}.nitro-meter i{display:block;width:100%;height:100%;background:#35cfff;box-shadow:0 0 12px #35cfff}
+
+.nitro-screen{position:absolute;inset:0;z-index:1;overflow:hidden;pointer-events:none;opacity:0;transition:opacity .12s ease-out;background:radial-gradient(ellipse at center,transparent 48%,#00bfff12 78%,#00cfff32 100%);mask-image:radial-gradient(ellipse at center,transparent 40%,#000 76%)}
+.nitro-screen.active{opacity:1}
+.nitro-screen i{position:absolute;left:50%;top:50%;width:clamp(70px,12vw,200px);height:1px;transform-origin:0 0;background:linear-gradient(90deg,transparent,#53dfff66,#d0faffcc);box-shadow:0 0 5px #00cfff88;animation:nitro-streak var(--duration) linear var(--delay) infinite;animation-play-state:paused}
+.nitro-screen.active i{animation-play-state:running}
+@keyframes nitro-streak{0%{opacity:0;transform:rotate(var(--angle)) translateX(24vw) scaleX(.35)}30%{opacity:.65}100%{opacity:0;transform:rotate(var(--angle)) translateX(72vw) scaleX(1.8)}}
+@media(prefers-reduced-motion:reduce){.nitro-screen i{display:none}.nitro-screen{transition:none}}
